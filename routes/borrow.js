@@ -4,27 +4,40 @@ const auth = require('../middleware/auth');
 const router = express.Router();
 
 router.post('/', auth, async (req, res) => {
-  const { bookId } = req.body;
+  const { bookIds } = req.body; // Expecting an array of book IDs
 
   // Validation
-  if (!bookId) {
-    return res.status(400).json({ message: 'Book ID is required' });
+  if (!bookIds || !Array.isArray(bookIds) || bookIds.length === 0) {
+    return res.status(400).json({ message: 'At least one book ID is required' });
   }
 
   try {
-    const [books] = await db.query('SELECT quantity FROM books WHERE id = ?', [bookId]);
-    if (books.length === 0 || books[0].quantity <= 0) {
-      return res.status(400).json({ message: 'Book not available' });
+    // Check availability of all books
+    const [books] = await db.query('SELECT id, quantity FROM books WHERE id IN (?)', [bookIds]);
+    const unavailableBooks = books.filter((book) => book.quantity <= 0);
+    if (unavailableBooks.length > 0) {
+      return res.status(400).json({
+        message: `The following books are not available: ${unavailableBooks
+          .map((b) => b.id)
+          .join(', ')}`,
+      });
     }
 
-    await db.query('INSERT INTO borrows (user_id, book_id, borrow_date) VALUES (?, ?, CURDATE())', [
-      req.user.id,
-      bookId,
-    ]);
-    await db.query('UPDATE books SET quantity = quantity - 1 WHERE id = ?', [bookId]);
-    res.json({ message: 'Book borrowed successfully' });
+    // Borrow each book
+    for (const bookId of bookIds) {
+      if (!books.find((b) => b.id === bookId)) {
+        return res.status(400).json({ message: `Book ID ${bookId} not found` });
+      }
+      await db.query('INSERT INTO borrows (user_id, book_id, borrow_date) VALUES (?, ?, CURDATE())', [
+        req.user.id,
+        bookId,
+      ]);
+      await db.query('UPDATE books SET quantity = quantity - 1 WHERE id = ?', [bookId]);
+    }
+
+    res.json({ message: `${bookIds.length} book(s) borrowed successfully` });
   } catch (error) {
-    res.status(500).json({ message: 'Error borrowing book', error });
+    res.status(500).json({ message: 'Error borrowing books', error });
   }
 });
 
