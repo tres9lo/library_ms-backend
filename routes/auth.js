@@ -33,7 +33,7 @@ router.post('/register', async (req, res) => {
     ]);
     res.status(201).json({ message: 'User registered successfully' });
   } catch (error) {
-    res.status(500).json({ message: 'Error registering user', error });
+    res.status(500).json({ message: 'Error registering user', error: error.message });
   }
 });
 
@@ -58,7 +58,7 @@ router.post('/login', async (req, res) => {
     });
     res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
   } catch (error) {
-    res.status(500).json({ message: 'Error logging in', error });
+    res.status(500).json({ message: 'Error logging in', error: error.message });
   }
 });
 
@@ -66,39 +66,23 @@ router.get('/stats', auth, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Total books borrowed
-    const [booksBorrowedResult] = await db.query('SELECT COUNT(*) as count FROM borrows WHERE user_id = ?', [userId]);
-    const booksBorrowed = booksBorrowedResult[0].count;
-
-    // Currently reading (status = 'borrowed')
-    const [currentlyReadingResult] = await db.query(
-      'SELECT COUNT(*) as count FROM borrows WHERE user_id = ? AND status = "borrowed"',
-      [userId]
-    );
-    const currentlyReading = currentlyReadingResult[0].count;
-
-    // Completed books (status = 'returned')
-    const [completedBooksResult] = await db.query(
-      'SELECT COUNT(*) as count FROM borrows WHERE user_id = ? AND status = "returned"',
-      [userId]
-    );
-    const completedBooks = completedBooksResult[0].count;
-
-    // Books due soon (borrowed > 7 days ago, assuming 14-day borrow period)
-    const [booksDueSoonResult] = await db.query(
-      'SELECT COUNT(*) as count FROM borrows WHERE user_id = ? AND status = "borrowed" AND borrow_date <= DATE_SUB(CURDATE(), INTERVAL 7 DAY)',
-      [userId]
-    );
-    const booksDueSoon = booksDueSoonResult[0].count;
+    // Optimize queries with a single database call
+    const [stats] = await db.query(`
+      SELECT
+        (SELECT COUNT(*) FROM borrows WHERE user_id = ?) AS booksBorrowed,
+        (SELECT COUNT(*) FROM borrows WHERE user_id = ? AND status = 'borrowed') AS currentlyReading,
+        (SELECT COUNT(*) FROM borrows WHERE user_id = ? AND status = 'returned') AS completedBooks,
+        (SELECT COUNT(*) FROM borrows WHERE user_id = ? AND status = 'borrowed' AND borrow_date <= DATE_SUB(CURDATE(), INTERVAL 7 DAY)) AS booksDueSoon
+    `, [userId, userId, userId, userId]);
 
     res.json({
-      booksBorrowed,
-      currentlyReading,
-      completedBooks,
-      booksDueSoon,
+      booksBorrowed: stats[0].booksBorrowed || 0,
+      currentlyReading: stats[0].currentlyReading || 0,
+      completedBooks: stats[0].completedBooks || 0,
+      booksDueSoon: stats[0].booksDueSoon || 0,
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching user stats', error });
+    res.status(500).json({ message: 'Error fetching user stats', error: error.message });
   }
 });
 
